@@ -193,7 +193,7 @@ def build_breaking_news_alerts(events):
             "domain",
             "page_title")
         .dropDuplicates(["keyword_window", "keyword", "page_id"]))
-
+    
     keyword_bursts = (
         keyword_tokens
         .groupBy("keyword_window", "keyword")
@@ -294,7 +294,7 @@ def write_bot_activity(batch_df):
         batch_df
         .withColumn("rn", F.row_number().over(rank_window))
         .where(F.col("rn") <= 5))
-
+    
     top_bots = (
         ranked_users
         .where(F.col("is_bot"))
@@ -305,7 +305,14 @@ def write_bot_activity(batch_df):
                     F.struct(
                         F.col("user_name").alias("name"),
                         F.col("pages_created_by_user").alias("pages"),
-                        F.col("is_bot").alias("is_bot")))).alias("top_bots")))
+                        F.col("is_bot").alias("is_bot")
+                    )
+                )
+            ).alias("top_bots")
+        )
+        .withColumnRenamed("domain", "bot_domain")
+        .withColumnRenamed("minute_start", "bot_minute_start")
+    )
 
     top_humans = (
         ranked_users
@@ -317,12 +324,24 @@ def write_bot_activity(batch_df):
                     F.struct(
                         F.col("user_name").alias("name"),
                         F.col("pages_created_by_user").alias("pages"),
-                        F.col("is_bot").alias("is_bot")))).alias("top_humans")))
+                        F.col("is_bot").alias("is_bot")))).alias("top_humans"))
+        .withColumnRenamed("domain", "human_domain")
+        .withColumnRenamed("minute_start", "human_minute_start"))
 
     bot_activity_metrics = (
         bot_totals
-        .join(top_bots, on=["domain", "minute_start"], how="left")
-        .join(top_humans, on=["domain", "minute_start"], how="left")
+        .join(
+            top_bots,
+            (F.col("domain") == F.col("bot_domain")) &
+            (F.col("minute_start") == F.col("bot_minute_start")),
+            "left")
+        .drop("bot_domain", "bot_minute_start")
+        .join(
+            top_humans,
+            (F.col("domain") == F.col("human_domain")) &
+            (F.col("minute_start") == F.col("human_minute_start")),
+            "left")
+        .drop("human_domain", "human_minute_start")
         .withColumn("top_bots", F.coalesce(F.col("top_bots"), F.lit("[]")))
         .withColumn("top_humans", F.coalesce(F.col("top_humans"), F.lit("[]"))))
 
