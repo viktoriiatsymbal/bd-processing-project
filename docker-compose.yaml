@@ -73,8 +73,13 @@ services:
       - "8082:8080"
     volumes:
       - ./shared:/opt/spark-streaming
+      - ./batch:/opt/spark-batch
     depends_on:
+      cassandra-init:
+        condition: service_completed_successfully
       kafka-init:
+        condition: service_completed_successfully
+      minio-init:
         condition: service_completed_successfully
     networks:
       - wikipedia-network
@@ -101,6 +106,123 @@ services:
       - ./shared:/opt/spark-streaming
     networks:
       - wikipedia-network
+
+  cassandra:
+    image: cassandra:4.1 #maybe use 5
+    container_name: cassandra
+    ports:
+      - "9042:9042"
+    environment:
+      CASSANDRA_CLUSTER_NAME: wiki-cluster
+      CASSANDRA_DC: datacenter1
+      CASSANDRA_RACK: rack1
+      MAX_HEAP_SIZE: 512M
+      HEAP_NEWSIZE: 128M
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'describe keyspaces' || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 20
+      start_period: 60s
+    networks:
+      - wikipedia-network
+
+  cassandra-init:
+    image: cassandra:4.1
+    container_name: cassandra-init
+    depends_on:
+      cassandra:
+        condition: service_healthy
+    volumes:
+      - ./cassandra/schema.cql:/schema.cql
+    entrypoint: >
+      /bin/sh -c "
+      echo 'Waiting for Cassandra schema initialisation...' &&
+      cqlsh cassandra 9042 -f /schema.cql &&
+      echo 'Cassandra schema initialised'
+      "
+    networks:
+      - wikipedia-network
+  
+  consumer-cassandra:
+    build: ./consumer-cassandra
+    container_name: consumer-cassandra
+    depends_on:
+      cassandra-init:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      KAFKA_TOPIC: page-create-events
+      CASSANDRA_HOSTS: cassandra
+      CASSANDRA_KEYSPACE: wiki_analytics
+    networks:
+      - wikipedia-network
+
+  minio:
+    # image: minio/minio:RELEASE.2024-12-18T13-15-44Z
+    image: minio/minio:latest
+    container_name: minio
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: wikiuser
+      MINIO_ROOT_PASSWORD: wikipass
+    volumes:
+      - ./minio-data:/data
+    networks:
+      - wikipedia-network
+
+  minio-init:
+    image: minio/mc:latest
+    container_name: minio-init
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      until mc alias set local http://minio:9000 wikiuser wikipass; do sleep 2; done &&
+      mc mb -p local/wiki-events || true &&
+      mc ls local
+      "
+    networks:
+      - wikipedia-network
+
+  consumer-minio:
+    build: ./consumer-minio
+    container_name: consumer-minio
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      KAFKA_TOPIC: page-create-events
+      MINIO_ENDPOINT: http://minio:9000
+      MINIO_ACCESS_KEY: wikiuser
+      MINIO_SECRET_KEY: wikipass
+      MINIO_BUCKET: wiki-events
+      FLUSH_INTERVAL_SECONDS: 60
+    networks:
+      - wikipedia-network
+
+  api:
+    build: ./api
+    container_name: wiki-api
+    ports:
+      - "8000:8000"
+    depends_on:
+      cassandra-init:
+        condition: service_completed_successfully
+    environment:
+      CASSANDRA_HOST: cassandra
+      CASSANDRA_KEYSPACE: wiki_analytics
+    networks:
+      - wikipedia-network
+
 
 networks:
   wikipedia-network:
