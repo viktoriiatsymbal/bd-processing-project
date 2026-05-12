@@ -370,15 +370,30 @@ def write_bot_activity(batch_df):
 def write_minute_metrics(batch_df, batch_id):
     if batch_df.rdd.isEmpty():
         return
+
     print(f"Writing minute metrics batch {batch_id}", flush=True)
 
     batch_df = (
         batch_df
         .withColumn("minute_start", F.col("window.start"))
         .drop("window")
-        .cache())
-    write_language_activity(batch_df)
-    write_bot_activity(batch_df)
+        .cache()
+    )
+
+    try:
+        print("Writing language_activity...", flush=True)
+        write_language_activity(batch_df)
+        print("Finished writing language_activity", flush=True)
+    except Exception as exc:
+        print(f"ERROR writing language_activity: {exc}", flush=True)
+
+    try:
+        print("Writing bot_activity_metrics...", flush=True)
+        write_bot_activity(batch_df)
+        print("Finished writing bot_activity_metrics", flush=True)
+    except Exception as exc:
+        print(f"ERROR writing bot_activity_metrics: {exc}", flush=True)
+
     batch_df.unpersist()
 
 def build_single_bot_alerts(events):

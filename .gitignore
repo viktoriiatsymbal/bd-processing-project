@@ -2,3 +2,7 @@
 minio-data/
 
 .DS_Store
+
+streaming.log
+
+.streaming_pid
